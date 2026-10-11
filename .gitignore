@@ -1,2 +1,28 @@
-﻿node_modules/
+﻿@"
+# Secrets & Environment Variables
 .env
+*.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+**/node_modules/
+__pycache__/
+**/__pycache__/
+.venv/
+venv/
+
+# Local Databases & Checkpoints
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Build & IDE Artifacts
+dist/
+build/
+.vscode/
+.idea/
+*.log
+"@ | Set-Content -Path .gitignore -Encoding UTF8

@@ -1,0 +1,139 @@
+# ---------------------------------------------------------------------------
+# Airlock backend — local / single-host orchestration
+#
+# Usage:
+#   export JWT_SECRET="$(openssl rand -hex 32)"
+#   export MASTER_KEY="$(openssl rand -hex 32)"
+#   docker compose up --build
+#
+# Or place JWT_SECRET and MASTER_KEY in a `.env` file next to this compose
+# file — Compose interpolates ${JWT_SECRET} / ${MASTER_KEY} from it.
+# ---------------------------------------------------------------------------
+
+services:
+  # -------------------------------------------------------------------------
+  # Node.js API + WebSocket server
+  # -------------------------------------------------------------------------
+  airlock-app:
+    build:
+      context: ./airlock-backend
+      dockerfile: Dockerfile
+    image: airlock-backend:latest
+    container_name: airlock-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./airlock-backend/.env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      MONGO_URI: "mongodb://airlock-mongo:27017/airlock"
+      # Shared secret for internal service-to-service credential pulls.
+      # Must match INTERNAL_CREDENTIALS_TOKEN on mcp-service.
+      INTERNAL_CREDENTIALS_TOKEN: "${INTERNAL_CREDENTIALS_TOKEN:-}"
+    depends_on:
+      airlock-mongo:
+        condition: service_healthy
+    networks:
+      - airlock-net
+
+  # -------------------------------------------------------------------------
+  # MongoDB 8.0 with a persistent named volume
+  # -------------------------------------------------------------------------
+  airlock-mongo:
+    image: mongo:8.0
+    container_name: airlock-mongo
+    restart: unless-stopped
+    # Uncomment to reach the DB from the host for debugging:
+    # ports:
+    #   - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: airlock
+    volumes:
+      - airlock-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - airlock-net
+
+  # -------------------------------------------------------------------------
+  # MCP microservice — Open-Closed cloud providers + JIT credential vault pull
+  # -------------------------------------------------------------------------
+  mcp-service:
+    build:
+      context: ./mcp-microservice
+      dockerfile: Dockerfile
+    image: airlock-mcp:latest
+    container_name: mcp-service
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      AIRLOCK_BASE_URL: "http://airlock-app:3000"
+      AIRLOCK_REQUEST_TIMEOUT: "15"
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8001"
+      DRY_RUN: "${DRY_RUN:-true}"
+      AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-us-east-1}"
+      # Must match INTERNAL_CREDENTIALS_TOKEN on airlock-app.
+      INTERNAL_CREDENTIALS_TOKEN: "${INTERNAL_CREDENTIALS_TOKEN:-}"
+    depends_on:
+      airlock-app:
+        condition: service_started
+    networks:
+      - airlock-net
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health').status==200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # -------------------------------------------------------------------------
+  # Python LangGraph agent — FastAPI + AzureChatOpenAI + AsyncSqliteSaver
+  # -------------------------------------------------------------------------
+  python-service:
+    build:
+      context: ./python-microservices
+      dockerfile: Dockerfile
+    container_name: airlock-langgraph
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./python-microservices/.env
+    environment:
+      # Override networking for the Docker network — these take precedence
+      # over whatever is in python-microservices/.env
+      AIRLOCK_BASE_URL: "http://airlock-app:3000"
+      MCP_SERVER_URL: "http://mcp-service:8001"
+      MCP_REQUEST_TIMEOUT: "30"
+      SQLITE_PATH: "/app/data/checkpoints.sqlite"
+    volumes:
+      - langgraph_data:/app/data
+    depends_on:
+      airlock-app:
+        condition: service_started
+      mcp-service:
+        condition: service_healthy
+    networks:
+      - airlock-net
+
+volumes:
+  airlock-mongo-data:
+    driver: local
+  langgraph_data:
+    driver: local
+
+networks:
+  airlock-net:
+    driver: bridge

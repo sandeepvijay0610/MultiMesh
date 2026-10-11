@@ -1,0 +1,22 @@
+# MCP Python SDK — upgraded to latest v1.x.
+# mcp 1.2.0 does not expose FastMCP.sse_app(); the method was added in
+# a March 2025 PR. 1.29.1 is the newest v1.x line at time of writing.
+mcp==1.29.1
+
+# AWS SDK — only imported by aws_provider.py when real credentials exist
+boto3==1.35.80
+botocore==1.35.80
+
+# HTTP client — VaultClient calls Node.js
+httpx==0.27.2
+
+# Settings
+# The old pydantic<2.11 ceiling was specific to mcp 1.2.0 (which imported
+# a removed internal helper). 1.29.1 does not have that constraint, so
+# this can float within the v2 line.
+pydantic>=2.8,<3
+pydantic-settings>=2.6
+python-dotenv==1.0.1
+
+# ASGI runtime for the SSE app
+uvicorn[standard]==0.32.0

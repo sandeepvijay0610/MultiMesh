@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.git/
+.pytest_cache/

@@ -14,33 +14,11 @@ function baseTransform(doc, ret) {
 
 const environmentSchema = new mongoose.Schema(
   {
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-      index: true,
-    },
-    provider: {
-      type: String,
-      required: [true, 'provider is required'],
-      trim: true,
-    },
-    alias: {
-      type: String,
-      required: [true, 'alias is required'],
-      trim: true,
-    },
-    accessKey: {
-      type: String,
-      required: [true, 'accessKey is required'],
-      // Credentials are never loaded unless explicitly requested.
-      select: false,
-    },
-    secretKey: {
-      type: String,
-      required: [true, 'secretKey is required'],
-      select: false,
-    },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    provider: { type: String, required: [true, 'provider is required'], trim: true },
+    alias: { type: String, required: [true, 'alias is required'], trim: true },
+    accessKey: { type: String, required: [true, 'accessKey is required'], select: false },
+    secretKey: { type: String, required: [true, 'secretKey is required'], select: false },
   },
   {
     timestamps: true,
@@ -49,7 +27,6 @@ const environmentSchema = new mongoose.Schema(
       versionKey: false,
       transform(doc, ret) {
         baseTransform(doc, ret);
-        // HARD RULE: never leak credentials — not plaintext, not ciphertext.
         delete ret.accessKey;
         delete ret.secretKey;
         return ret;
@@ -68,33 +45,21 @@ const environmentSchema = new mongoose.Schema(
   }
 );
 
-/**
- * Encrypt credentials with the AES-256-GCM Vault before persistence.
- * Idempotent: already-encrypted values are not re-encrypted.
- */
 environmentSchema.pre('save', function encryptCredentials(next) {
   try {
     const vault = Vault.getInstance();
-
     if (this.isModified('accessKey') && this.accessKey && !Vault.isEncrypted(this.accessKey)) {
       this.accessKey = vault.encrypt(this.accessKey);
     }
-
     if (this.isModified('secretKey') && this.secretKey && !Vault.isEncrypted(this.secretKey)) {
       this.secretKey = vault.encrypt(this.secretKey);
     }
-
     return next();
   } catch (err) {
     return next(err);
   }
 });
 
-/**
- * Decrypts credentials for internal use ONLY (e.g. a future execution worker).
- * Requires the document to have been loaded with .select('+accessKey +secretKey').
- * @returns {{ accessKey: string|null, secretKey: string|null }}
- */
 environmentSchema.methods.getDecryptedCredentials = function getDecryptedCredentials() {
   const vault = Vault.getInstance();
   return {

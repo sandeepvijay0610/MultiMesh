@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+# Airlock backend — Docker build context exclusions
+# ---------------------------------------------------------------------------
+
+# Dependencies — reinstalled inside the image from package.json/lock.
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn
+
+# Secrets & environment — NEVER bake these into a layer.
+.env
+.env.*
+!.env.example
+
+# VCS & CI
+.git
+.gitignore
+.gitattributes
+.github
+.gitlab-ci.yml
+.circleci
+
+# Docker & orchestration (not needed inside the image)
+Dockerfile
+Dockerfile.*
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
+
+# Editor / OS noise
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs & runtime artefacts
+logs
+*.log
+coverage
+.nyc_output
+tmp
+temp
+
+# Tests & tooling (not shipped to runtime)
+test
+tests
+__tests__
+*.test.js
+*.spec.js
+jest.config.*
+mocha.*
+.eslintrc*
+.prettierrc*
+.editorconfig

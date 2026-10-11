@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const http = require('http');
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 
 const createApp = require('./app');
@@ -27,6 +28,39 @@ function assertConfig() {
 
   // Instantiate the vault now so a bad MASTER_KEY fails fast at boot.
   Vault.getInstance();
+}
+
+/**
+ * Extracts a bearer token from a socket.io handshake.
+ *
+ * Priority:
+ *   1. socket.handshake.auth.token   (preferred — never logged in URLs)
+ *   2. Authorization: Bearer <token> (Node / server-side clients)
+ *   3. ?token= query param           (last-resort fallback, e.g. browsers
+ *                                     that cannot set handshake auth)
+ *
+ * @param {import('socket.io').Socket} socket
+ * @returns {string|null}
+ */
+function extractHandshakeToken(socket) {
+  const auth = socket.handshake.auth || {};
+  if (typeof auth.token === 'string' && auth.token.trim()) {
+    return auth.token.trim();
+  }
+
+  const header =
+    socket.handshake.headers?.authorization ||
+    socket.handshake.headers?.Authorization ||
+    '';
+  const match = /^Bearer\s+(.+)$/i.exec(String(header).trim());
+  if (match) return match[1].trim();
+
+  const queryToken = socket.handshake.query?.token;
+  if (typeof queryToken === 'string' && queryToken.trim()) {
+    return queryToken.trim();
+  }
+
+  return null;
 }
 
 async function bootstrap() {
@@ -55,13 +89,63 @@ async function bootstrap() {
   // `req.app.get('io')`, which avoids any circular dependency.
   app.set('io', io);
 
-  io.on('connection', (socket) => {
-    console.log(`[airlock] socket connected: ${socket.id}`);
+  // ---- Socket authentication (MULTI-TENANT ISOLATION) --------------------
+  // Reject the handshake before a connection is ever established unless the
+  // client presents a valid JWT. The verified user id becomes the socket's
+  // private room, so no tenant can ever observe another tenant's events.
+  io.use((socket, next) => {
+    try {
+      if (!process.env.JWT_SECRET) {
+        return next(new Error('Authentication error'));
+      }
 
-    socket.emit('connected', { socketId: socket.id, ts: Date.now() });
+      const token = extractHandshakeToken(socket);
+      if (!token) {
+        return next(new Error('Authentication error'));
+      }
+
+      let payload;
+      try {
+        payload = jwt.verify(token, process.env.JWT_SECRET);
+      } catch (err) {
+        const reason = err.name === 'TokenExpiredError' ? 'Token expired' : 'Invalid token';
+        return next(new Error(`Authentication error: ${reason}`));
+      }
+
+      const userId = payload.sub || payload.id;
+      if (!userId) {
+        return next(new Error('Authentication error'));
+      }
+
+      // Stash the identity on the socket for room assignment + logging.
+      socket.userId = String(userId);
+      socket.tokenExp = payload.exp || null;
+
+      return next();
+    } catch (err) {
+      return next(new Error('Authentication error'));
+    }
+  });
+
+  io.on('connection', (socket) => {
+    // Join a private room unique to this user. Every subsequent
+    // `io.to(userId).emit(...)` reaches ONLY this user's sockets.
+    socket.join(socket.userId);
+
+    console.log(
+      `[airlock] socket connected: ${socket.id} for user ${socket.userId}`
+    );
+
+    socket.emit('connected', {
+      socketId: socket.id,
+      userId: socket.userId,
+      ts: Date.now(),
+    });
 
     socket.on('disconnect', (reason) => {
-      console.log(`[airlock] socket disconnected: ${socket.id} (${reason})`);
+      console.log(
+        `[airlock] socket disconnected: ${socket.id} for user ${socket.userId} (${reason})`
+      );
     });
   });
   // ------------------------------------------------------------------------

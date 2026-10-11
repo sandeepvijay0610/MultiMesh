@@ -16,14 +16,29 @@ const { PENDING_APPROVAL, APPROVED, REJECTED } = Action.STATUS;
 router.use(requireAuth);
 
 /**
- * Broadcast helper. Socket.io is attached to the app in server.js via
- * `app.set('io', io)` which avoids a circular dependency between the
- * socket layer and the route layer.
+ * Broadcast helper — TENANT-SCOPED.
+ *
+ * Socket.io is attached to the app in server.js via `app.set('io', io)` to
+ * avoid a circular dependency between the socket layer and the route layer.
+ *
+ * Every authenticated socket joins a private room named after its verified
+ * user id (see server.js `io.use(...)` + `socket.join(socket.userId)`).
+ * Emitting with `io.to(userId)` therefore reaches ONLY the owning tenant's
+ * sockets. `io.emit(...)` is never used here — that would broadcast every
+ * action, tool invocation, and parameter string to every connected client.
+ *
+ * @param {import('express').Request} req
+ * @param {import('mongoose').Document} action
  */
 function emitActionStateChanged(req, action) {
   const io = req.app.get('io');
   if (!io) return;
-  io.emit('actionStateChanged', action.toJSON ? action.toJSON() : action);
+  if (!req.user || !req.user._id) return;
+
+  const room = req.user._id.toString();
+  const payload = action.toJSON ? action.toJSON() : action;
+
+  io.to(room).emit('actionStateChanged', payload);
 }
 
 /**
